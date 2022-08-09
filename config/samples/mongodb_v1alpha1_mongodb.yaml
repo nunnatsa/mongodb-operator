@@ -1,0 +1,6 @@
+apiVersion: mongodb.example.com/v1alpha1
+kind: MongoDB
+metadata:
+  name: mongodb-sample
+spec:
+  storageClassName: nfs
