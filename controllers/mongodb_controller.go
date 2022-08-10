@@ -33,8 +33,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -75,20 +81,9 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	foundFinalizer := false
-	for _, fin := range mdb.Finalizers {
-		if fin == mongoDBFinalizer {
-			foundFinalizer = true
-			break
-		}
-	}
-
-	if !foundFinalizer {
+	if !controllerutil.ContainsFinalizer(mdb, mongoDBFinalizer) {
 		if mdb.DeletionTimestamp == nil {
-			err = r.setFinalizer(ctx, mdb)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
+			controllerutil.AddFinalizer(mdb, mongoDBFinalizer)
 		}
 	} else if mdb.DeletionTimestamp != nil {
 		err = r.ensureDeletion(ctx, mdb)
@@ -131,7 +126,8 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		ObservedGeneration: mdb.Generation,
 	})
 
-	mdb.Status.ConnectionURL = pointer.String(fmt.Sprintf("mongodb://%s:%d?replicaSet=%s", mdb.Name, getPort(mdb), mdb.Name))
+	url := fmt.Sprintf("mongodb://%s:%d?replicaSet=%s", mdb.Name, getPort(mdb), mdb.Name)
+	mdb.Status.ConnectionURL = pointer.String(url)
 	mdb.Status.Replicas = pointer.Int32(replicas)
 
 	_ = r.Status().Update(ctx, mdb, &client.UpdateOptions{})
@@ -143,7 +139,32 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&api.MongoDB{}).
-		Complete(r)
+		Watches(
+			&source.Kind{Type: &appsv1.StatefulSet{}},
+			handler.EnqueueRequestsFromMapFunc(objectToRequest),
+			builder.WithPredicates(getLabelPredicate()),
+		).
+		Watches(
+			&source.Kind{Type: &corev1.Service{}},
+			handler.EnqueueRequestsFromMapFunc(objectToRequest),
+			builder.WithPredicates(getLabelPredicate()),
+		).Complete(r)
+}
+
+func objectToRequest(o client.Object) []reconcile.Request {
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}}}
+}
+
+func getLabelPredicate() predicate.Predicate {
+	p, _ := predicate.LabelSelectorPredicate(
+		metav1.LabelSelector{
+			MatchExpressions: []metav1.LabelSelectorRequirement{{
+				Key:      dbNameLabel,
+				Operator: metav1.LabelSelectorOpExists,
+				Values:   nil,
+			}},
+		})
+	return p
 }
 
 func (r *MongoDBReconciler) setFinalizer(ctx context.Context, mdb *api.MongoDB) error {
@@ -458,7 +479,9 @@ func (r *MongoDBReconciler) ensureDeletion(ctx context.Context, mdb *api.MongoDB
 		}
 	}
 
-	return r.dropFinalizer(ctx, mdb)
+	controllerutil.RemoveFinalizer(mdb, mongoDBFinalizer)
+
+	return nil
 }
 
 func (r MongoDBReconciler) deleteStatefulSet(ctx context.Context, mdb *api.MongoDB) error {
