@@ -50,6 +50,7 @@ type MongoDBStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
+// +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".status.replicas",description="Number of hosts in the mongoDB replicaSet"
 
 // MongoDB is the Schema for the mongodbs API
 type MongoDB struct {

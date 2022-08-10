@@ -17,7 +17,12 @@ spec:
     singular: mongodb
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Number of hosts in the mongoDB replicaSet
+      jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: MongoDB is the Schema for the mongodbs API
