@@ -36,9 +36,13 @@ spec:
       containers:
       - command:
         - /manager
+        env:
+        - name: MONGODB_IMAGE_NAME
+          value: docker.io/library/mongo:latest
         args:
         - --leader-elect
-        image: controller:latest
+        image: quay.io/nunnatsa/mongodb-operator:v0.0.9
+        imagePullPolicy: Always
         name: manager
         securityContext:
           allowPrivilegeEscalation: false
