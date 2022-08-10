@@ -83,14 +83,20 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if !controllerutil.ContainsFinalizer(mdb, mongoDBFinalizer) {
 		if mdb.DeletionTimestamp == nil {
+			logger.Info("adding finalizer")
 			controllerutil.AddFinalizer(mdb, mongoDBFinalizer)
 		}
 	} else if mdb.DeletionTimestamp != nil {
 		err = r.ensureDeletion(ctx, mdb)
 		if err != nil {
+			logger.Error(err, "failed to ensure deletion")
 			return ctrl.Result{}, fmt.Errorf("failed to delete resources; %w", err)
 		}
-		return ctrl.Result{}, nil
+
+		logger.Info("removing the finalizer")
+		controllerutil.RemoveFinalizer(mdb, mongoDBFinalizer)
+
+		return ctrl.Result{}, r.Update(ctx, mdb)
 	}
 
 	var lastError error
@@ -478,8 +484,6 @@ func (r *MongoDBReconciler) ensureDeletion(ctx context.Context, mdb *api.MongoDB
 			return err
 		}
 	}
-
-	controllerutil.RemoveFinalizer(mdb, mongoDBFinalizer)
 
 	return nil
 }
