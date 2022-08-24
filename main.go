@@ -101,9 +101,10 @@ func main() {
 	}
 
 	if err = (&controllers.MongoDBReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		MDBImage: mdbImage,
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		MDBImage:      mdbImage,
+		EventRecorder: mgr.GetEventRecorderFor("mongodb-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MongoDB")
 		os.Exit(1)

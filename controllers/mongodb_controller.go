@@ -19,8 +19,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+
 	"github.com/go-logr/logr"
-	api "github.com/nunnatsa/mongodb-operator/api/v1alpha1"
 	"github.com/nunnatsa/mongodb-operator/pkg/mongohelper"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -41,6 +42,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+
+	api "github.com/nunnatsa/mongodb-operator/api/v1alpha1"
 )
 
 const (
@@ -53,14 +56,16 @@ const (
 // MongoDBReconciler reconciles a MongoDB object
 type MongoDBReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	MDBImage string
+	Scheme        *runtime.Scheme
+	MDBImage      string
+	EventRecorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=mongodb.example.com,resources=mongodbs,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=mongodb.example.com,resources=mongodbs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=mongodb.example.com,resources=mongodbs/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=services;persistentvolumeclaims;,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events;,verbs=create
 // +kubebuilder:rbac:groups="apps",resources=statefulsets;,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -127,7 +132,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	meta.SetStatusCondition(&mdb.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,
-		Reason:             "creatingDeployment",
+		Reason:             "creatingStatefulSet",
 		Message:            fmt.Sprintf("the %s replica set is ready", mdb.Name),
 		ObservedGeneration: mdb.Generation,
 	})
@@ -173,44 +178,7 @@ func getLabelPredicate() predicate.Predicate {
 	return p
 }
 
-func (r *MongoDBReconciler) setFinalizer(ctx context.Context, mdb *api.MongoDB) error {
-	patchData := []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/finalizers/-", "value": "%s"}]`, mongoDBFinalizer))
-
-	if mdb.Finalizers == nil {
-		patchData = []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/finalizers", "value": ["%s"]}]`, mongoDBFinalizer))
-	}
-
-	patch := client.RawPatch(types.JSONPatchType, patchData)
-	return r.Patch(ctx, mdb, patch)
-}
-
-func (r *MongoDBReconciler) dropFinalizer(ctx context.Context, mdb *api.MongoDB) error {
-	err := r.Get(ctx, client.ObjectKey{Namespace: mdb.Namespace, Name: mdb.Name}, mdb)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	finalizers := make([]string, 0)
-	changed := false
-	for _, finalizer := range mdb.Finalizers {
-		if finalizer != mongoDBFinalizer {
-			finalizers = append(finalizers, finalizer)
-		} else {
-			changed = true
-		}
-	}
-
-	if changed {
-		mdb.Finalizers = finalizers
-		return r.Update(ctx, mdb)
-	}
-	return nil
-}
-
-func (r MongoDBReconciler) getStatefulSet(ctx context.Context, mdb *api.MongoDB) (*appsv1.StatefulSet, error) {
+func (r *MongoDBReconciler) getStatefulSet(ctx context.Context, mdb *api.MongoDB) (*appsv1.StatefulSet, error) {
 	deploy := &appsv1.StatefulSet{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: mdb.Namespace, Name: mdb.Name}, deploy)
 	return deploy, err
@@ -222,25 +190,33 @@ func (r *MongoDBReconciler) ensureStatefulSet(ctx context.Context, mdb *api.Mong
 	set, err := r.getStatefulSet(ctx, mdb)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			logger.Info("creating new deployment", "name", mdb.Name)
+			logger.Info("creating new StatefulSet", "name", mdb.Name)
 			err = r.createNewStatefulSet(ctx, mdb)
 			if err != nil {
-				return fmt.Errorf("failed to create deployment; %w", err)
+				return fmt.Errorf("failed to create StatefulSet; %w", err)
 			}
+
+			logger.Info("StatefulSet created", "name", mdb.Name)
+			r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Created", "Created StatefulSet "+mdb.Name)
 			return nil
 		} else {
-			return fmt.Errorf("failed to get deployment; %w", err)
+			return fmt.Errorf("failed to get StatefulSet; %w", err)
 		}
 	}
-	err = r.updateStatefulSet(ctx, set, mdb)
+	updated, err := r.updateStatefulSet(ctx, set, mdb)
 	if err != nil {
-		return fmt.Errorf("failed to update deployment; %w", err)
+		return fmt.Errorf("failed to update StatefulSet; %w", err)
+	}
+
+	if updated {
+		logger.Info("StatefulSet updated", "name", mdb.Name)
+		r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Updated", "Updated StatefulSet "+mdb.Name)
 	}
 
 	return nil
 }
 
-func (r MongoDBReconciler) getService(ctx context.Context, mdb *api.MongoDB) (*corev1.Service, error) {
+func (r *MongoDBReconciler) getService(ctx context.Context, mdb *api.MongoDB) (*corev1.Service, error) {
 	svc := &corev1.Service{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: mdb.Namespace, Name: mdb.Name}, svc)
 	return svc, err
@@ -250,11 +226,27 @@ func (r *MongoDBReconciler) ensureService(ctx context.Context, mdb *api.MongoDB)
 	svc, err := r.getService(ctx, mdb)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.createNewService(ctx, mdb)
+			err = r.createNewService(ctx, mdb)
+			if err != nil {
+				return fmt.Errorf("failed to create service; %w", err)
+			}
+
+			r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Created", "Created Service "+mdb.Name)
+
+			return nil
 		}
 	}
 
-	return r.updateService(ctx, svc, mdb)
+	updated, err := r.updateService(ctx, svc, mdb)
+	if err != nil {
+		return fmt.Errorf("failed to update Service; %w", err)
+	}
+
+	if updated {
+		r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Updated", "Updated Service "+mdb.Name)
+	}
+
+	return nil
 }
 
 func (r *MongoDBReconciler) createNewService(ctx context.Context, mdb *api.MongoDB) error {
@@ -288,9 +280,9 @@ func (r *MongoDBReconciler) createNewService(ctx context.Context, mdb *api.Mongo
 	return r.Create(ctx, svc, &client.CreateOptions{})
 }
 
-func (r *MongoDBReconciler) updateService(_ context.Context, _ *corev1.Service, _ *api.MongoDB) error {
+func (r *MongoDBReconciler) updateService(_ context.Context, _ *corev1.Service, _ *api.MongoDB) (bool, error) {
 	// todo: implement
-	return nil
+	return false, nil
 }
 
 func (r *MongoDBReconciler) createNewStatefulSet(ctx context.Context, mdb *api.MongoDB) error {
@@ -379,8 +371,8 @@ func (r *MongoDBReconciler) createNewStatefulSet(ctx context.Context, mdb *api.M
 	meta.SetStatusCondition(&mdb.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
-		Reason:             "creatingDeployment",
-		Message:            "creating the mongoDB deployment",
+		Reason:             "creatingStatefulSet",
+		Message:            "creating the mongoDB StatefulSet",
 		ObservedGeneration: mdb.Generation,
 	})
 
@@ -389,7 +381,7 @@ func (r *MongoDBReconciler) createNewStatefulSet(ctx context.Context, mdb *api.M
 	return r.Create(ctx, set, &client.CreateOptions{})
 }
 
-func (r *MongoDBReconciler) updateStatefulSet(ctx context.Context, set *appsv1.StatefulSet, mdb *api.MongoDB) error {
+func (r *MongoDBReconciler) updateStatefulSet(ctx context.Context, set *appsv1.StatefulSet, mdb *api.MongoDB) (bool, error) {
 	changed := false
 
 	replicas := getReplicas(mdb)
@@ -431,14 +423,14 @@ func (r *MongoDBReconciler) updateStatefulSet(ctx context.Context, set *appsv1.S
 
 		err := r.Update(ctx, set, &client.UpdateOptions{})
 		if err != nil {
-			return err
+			return false, err
 		}
 
 		if pvcsToRemove > 0 {
 			for node := int32(0); node < pvcsToRemove; node++ {
 				err = r.deletePVC(ctx, mdb, node+replicas)
 				if err != nil {
-					return err
+					return false, err
 				}
 			}
 		}
@@ -462,7 +454,7 @@ func (r *MongoDBReconciler) updateStatefulSet(ctx context.Context, set *appsv1.S
 
 	_ = r.Update(ctx, mdb, &client.UpdateOptions{})
 
-	return nil
+	return changed, nil
 }
 
 func (r *MongoDBReconciler) ensureDeletion(ctx context.Context, mdb *api.MongoDB) error {
@@ -470,11 +462,13 @@ func (r *MongoDBReconciler) ensureDeletion(ctx context.Context, mdb *api.MongoDB
 	if err != nil {
 		return err
 	}
+	r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Deleted", "Deleted Service "+mdb.Name)
 
 	err = r.deleteStatefulSet(ctx, mdb)
 	if err != nil {
 		return err
 	}
+	r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Deleted", "Deleted StatefulSet "+mdb.Name)
 
 	replicas := getReplicas(mdb)
 
@@ -488,7 +482,7 @@ func (r *MongoDBReconciler) ensureDeletion(ctx context.Context, mdb *api.MongoDB
 	return nil
 }
 
-func (r MongoDBReconciler) deleteStatefulSet(ctx context.Context, mdb *api.MongoDB) error {
+func (r *MongoDBReconciler) deleteStatefulSet(ctx context.Context, mdb *api.MongoDB) error {
 	set, err := r.getStatefulSet(ctx, mdb)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -500,7 +494,7 @@ func (r MongoDBReconciler) deleteStatefulSet(ctx context.Context, mdb *api.Mongo
 	return r.Delete(ctx, set, &client.DeleteOptions{})
 }
 
-func (r MongoDBReconciler) deleteService(ctx context.Context, mdb *api.MongoDB) error {
+func (r *MongoDBReconciler) deleteService(ctx context.Context, mdb *api.MongoDB) error {
 	svc, err := r.getService(ctx, mdb)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -512,7 +506,7 @@ func (r MongoDBReconciler) deleteService(ctx context.Context, mdb *api.MongoDB) 
 	return r.Delete(ctx, svc, &client.DeleteOptions{})
 }
 
-func (r MongoDBReconciler) deletePVC(ctx context.Context, mdb *api.MongoDB, node int32) error {
+func (r *MongoDBReconciler) deletePVC(ctx context.Context, mdb *api.MongoDB, node int32) error {
 	name := fmt.Sprintf("%s-storage-%s-%d", mdb.Name, mdb.Name, node)
 	pvc, err := r.getPVC(ctx, mdb, name)
 	if err != nil {
@@ -522,7 +516,14 @@ func (r MongoDBReconciler) deletePVC(ctx context.Context, mdb *api.MongoDB, node
 		return err
 	}
 
-	return r.Delete(ctx, pvc, &client.DeleteOptions{})
+	err = r.Delete(ctx, pvc, &client.DeleteOptions{})
+	if err != nil {
+		return err
+	}
+
+	r.EventRecorder.Event(mdb, corev1.EventTypeNormal, "Deleted", "Deleted PersistentVolumeClaim "+pvc.Name)
+
+	return nil
 }
 
 func (r *MongoDBReconciler) getPVC(ctx context.Context, mdb *api.MongoDB, name string) (*corev1.PersistentVolumeClaim, error) {

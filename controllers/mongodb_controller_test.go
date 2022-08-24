@@ -15,6 +15,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+type eventRecorderMock struct{}
+
+func (*eventRecorderMock) Event(object runtime.Object, eventtype, reason, message string) {}
+func (*eventRecorderMock) Eventf(object runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+}
+func (*eventRecorderMock) AnnotatedEventf(object runtime.Object, annotations map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
+}
+
 var _ = Describe("test the controller", func() {
 	It("should create a deployment and a service", func() {
 		mdb := &api.MongoDB{
@@ -27,9 +35,10 @@ var _ = Describe("test the controller", func() {
 		client := fake.NewClientBuilder().WithObjects(mdb).WithScheme(setupScheme()).Build()
 
 		r := MongoDBReconciler{
-			Client:   client,
-			Scheme:   setupScheme(),
-			MDBImage: "image-name",
+			Client:        client,
+			Scheme:        setupScheme(),
+			MDBImage:      "image-name",
+			EventRecorder: &eventRecorderMock{},
 		}
 
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: "testdb"}})
