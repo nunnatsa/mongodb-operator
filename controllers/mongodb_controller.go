@@ -354,7 +354,7 @@ func (r *MongoDBReconciler) createNewStatefulSet(ctx context.Context, mdb *api.M
 						Name: mdb.Name + "-storage",
 					},
 					Spec: corev1.PersistentVolumeClaimSpec{
-						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+						AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 						Resources: corev1.ResourceRequirements{
 							Requests: corev1.ResourceList{
 								"storage": resource.MustParse("2Gi"),
