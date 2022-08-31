@@ -6,8 +6,9 @@
 The mongodb-operator is a kubernetes operator. It introduces the `MongoDB` custom resource, 
 and setup and maintain mongoDB replica sets according to the settings in this CR. 
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+## Demos
+See demo videos [here](https://youtube.com/playlist?list=PLIKHTOaF_ebDEaqcGIlaoea2kxL9pv6cR)
+
 
 ## Getting Started
 You’ll need a Kubernetes cluster to run against. You can use [KIND](https://sigs.k8s.io/kind) to get a local cluster for testing, or run against a remote cluster.
