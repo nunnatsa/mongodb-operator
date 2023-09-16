@@ -19,6 +19,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	"github.com/go-logr/logr"
 	"github.com/nunnatsa/mongodb-operator/pkg/mongohelper"
@@ -34,14 +36,11 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/pointer"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	api "github.com/nunnatsa/mongodb-operator/api/v1alpha1"
 )
@@ -141,7 +140,7 @@ func (r *MongoDBReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	mdb.Status.ConnectionURL = pointer.String(url)
 	mdb.Status.Replicas = pointer.Int32(replicas)
 
-	_ = r.Status().Update(ctx, mdb, &client.UpdateOptions{})
+	_ = r.Status().Update(ctx, mdb)
 
 	return ctrl.Result{}, nil
 }
@@ -151,18 +150,18 @@ func (r *MongoDBReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&api.MongoDB{}).
 		Watches(
-			&source.Kind{Type: &appsv1.StatefulSet{}},
+			&appsv1.StatefulSet{},
 			handler.EnqueueRequestsFromMapFunc(objectToRequest),
 			builder.WithPredicates(getLabelPredicate()),
 		).
 		Watches(
-			&source.Kind{Type: &corev1.Service{}},
+			&corev1.Service{},
 			handler.EnqueueRequestsFromMapFunc(objectToRequest),
 			builder.WithPredicates(getLabelPredicate()),
 		).Complete(r)
 }
 
-func objectToRequest(o client.Object) []reconcile.Request {
+func objectToRequest(_ context.Context, o client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: o.GetNamespace(), Name: o.GetName()}}}
 }
 
@@ -376,7 +375,7 @@ func (r *MongoDBReconciler) createNewStatefulSet(ctx context.Context, mdb *api.M
 		ObservedGeneration: mdb.Generation,
 	})
 
-	_ = r.Status().Update(ctx, mdb, &client.UpdateOptions{})
+	_ = r.Status().Update(ctx, mdb)
 
 	return r.Create(ctx, set, &client.CreateOptions{})
 }
@@ -419,7 +418,7 @@ func (r *MongoDBReconciler) updateStatefulSet(ctx context.Context, set *appsv1.S
 			ObservedGeneration: mdb.Generation,
 		})
 
-		_ = r.Status().Update(ctx, mdb, &client.UpdateOptions{})
+		_ = r.Status().Update(ctx, mdb)
 
 		err := r.Update(ctx, set, &client.UpdateOptions{})
 		if err != nil {
