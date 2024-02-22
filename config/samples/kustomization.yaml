@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- mongodb_v1alpha1_mongodbreplicaset.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples
